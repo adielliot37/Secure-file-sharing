@@ -2,6 +2,26 @@ import { useState, useRef, useEffect } from 'react'
 import { encryptFile, arrayBufferToBase64 } from '../utils/encryption'
 import { uploadToStoracha, createShareDelegation, authorizeClient, isClientAuthorized } from '../utils/storacha'
 
+function FlashLogo({ size = 'lg' }) {
+  const sizes = { sm: 'w-8 h-8', md: 'w-10 h-10', lg: 'w-14 h-14' }
+  return (
+    <div className={`${sizes[size]} relative inline-flex items-center justify-center`}>
+      <div className="absolute inset-0 bg-amber-500/20 rounded-2xl blur-xl"></div>
+      <div className="relative bg-zinc-900 border border-zinc-800 rounded-2xl w-full h-full flex items-center justify-center">
+        <svg viewBox="0 0 24 24" className="w-2/3 h-2/3" fill="none">
+          <path d="M13 2L4 14h7l-2 8 9-12h-7l2-8z" fill="url(#boltGrad)" />
+          <defs>
+            <linearGradient id="boltGrad" x1="4" y1="2" x2="18" y2="22">
+              <stop offset="0%" stopColor="#f59e0b" />
+              <stop offset="100%" stopColor="#ef4444" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+    </div>
+  )
+}
+
 export default function Upload() {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
@@ -143,60 +163,74 @@ export default function Upload() {
   const isFileInputDisabled = checkingAuth || !authorized
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 dark:text-white mb-2">
-            Decentralized Share
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
+      {/* Header */}
+      <div className="border-b border-zinc-800/50">
+        <div className="container mx-auto px-4 py-4 max-w-4xl flex items-center gap-3">
+          <FlashLogo size="md" />
+          <span className="font-brand text-xl font-bold tracking-tight text-white">Flash</span>
+        </div>
+      </div>
+
+      <div className="container mx-auto px-4 py-12 max-w-2xl">
+        {/* Hero */}
+        <div className="text-center mb-10">
+          <div className="flex justify-center mb-6">
+            <FlashLogo size="lg" />
+          </div>
+          <h1 className="font-brand text-5xl md:text-6xl font-bold tracking-tight mb-3">
+            <span className="bg-gradient-to-r from-amber-400 via-orange-400 to-red-500 bg-clip-text text-transparent">Flash</span>
           </h1>
-          <p className="text-gray-600 dark:text-gray-300">
-            Encrypted, permanent, and controlled by you
+          <p className="text-zinc-400 text-lg tracking-wide">
+            Private sharing in a flash.
           </p>
         </div>
 
         {!shareLink ? (
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 md:p-8">
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 md:p-8 backdrop-blur-sm">
             {checkingAuth ? (
               <div className="text-center py-8">
-                <p className="text-gray-600 dark:text-gray-300">Checking authorization...</p>
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-zinc-700 border-t-amber-500 mb-3"></div>
+                <p className="text-zinc-500 text-sm">Checking authorization...</p>
               </div>
             ) : !authorized ? (
-              <div className="mb-6 p-6 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                  Authorization Required
+              <div className="mb-6 p-5 bg-amber-500/5 border border-amber-500/20 rounded-xl">
+                <h3 className="text-base font-semibold text-white mb-1">
+                  Connect your identity
                 </h3>
-                <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
-                  To upload files to Storacha, you need to authorize your client with an email address.
+                <p className="text-sm text-zinc-500 mb-4">
+                  Authorize with your email to start sharing files.
                 </p>
                 <div className="space-y-3">
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="Enter your email address"
+                    className="w-full px-4 py-2.5 border border-zinc-700 rounded-xl bg-zinc-800/50 text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors text-sm"
+                    placeholder="you@email.com"
                   />
                   <button
                     onClick={handleAuthorize}
                     disabled={authorizing || !email}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-2.5 px-4 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm"
                   >
-                    {authorizing ? 'Authorizing...' : 'Authorize Storacha Client'}
+                    {authorizing ? 'Authorizing...' : 'Authorize'}
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="mb-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
-                <p className="text-sm text-green-700 dark:text-green-300">
-                  Storacha client authorized and ready to upload
-                </p>
+              <div className="mb-6 p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl flex items-center gap-2">
+                <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                <p className="text-sm text-emerald-400">Ready to share</p>
               </div>
             )}
+
+            {/* Drop Zone */}
             <div
-              className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
+              className={`border border-dashed rounded-xl p-10 text-center transition-all cursor-pointer ${
                 dragActive
-                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
-                  : 'border-gray-300 dark:border-gray-600'
+                  ? 'border-amber-500 bg-amber-500/5'
+                  : 'border-zinc-700 hover:border-zinc-600'
               }`}
               onDragEnter={handleDrag}
               onDragLeave={handleDrag}
@@ -213,114 +247,134 @@ export default function Upload() {
               />
               <label
                 htmlFor="file-input"
-                className={isFileInputDisabled ? "cursor-not-allowed opacity-50 block" : "cursor-pointer block"}
+                className={isFileInputDisabled ? "cursor-not-allowed opacity-40 block" : "cursor-pointer block"}
               >
-                <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-                  <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                <p className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  {file ? file.name : 'Drop file here or click to select'}
+                <div className="flex justify-center mb-4">
+                  <div className="w-12 h-12 rounded-xl bg-zinc-800 border border-zinc-700 flex items-center justify-center">
+                    <svg className="w-6 h-6 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                    </svg>
+                  </div>
+                </div>
+                <p className="text-sm font-medium text-zinc-300 mb-1">
+                  {file ? file.name : 'Drop a file or click to select'}
                 </p>
                 {file && (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                  <p className="text-xs text-zinc-600">
                     {(file.size / 1024 / 1024).toFixed(2)} MB
                   </p>
+                )}
+                {!file && (
+                  <p className="text-xs text-zinc-600">Any file type, encrypted before upload</p>
                 )}
               </label>
             </div>
 
+            {/* Options */}
             {file && (
               <div className="mt-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Recipient Email (leave empty for anyone with the link)
+                  <label className="block text-xs font-medium text-zinc-400 mb-1.5 uppercase tracking-wider">
+                    Recipient email
                   </label>
                   <input
                     type="email"
                     value={audienceEmail}
                     onChange={(e) => setAudienceEmail(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="recipient@email.com"
+                    className="w-full px-4 py-2.5 border border-zinc-700 rounded-xl bg-zinc-800/50 text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors text-sm"
+                    placeholder="Leave empty for anyone with the link"
                   />
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Only this person will be able to view the file after verifying their email
-                  </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Password (optional)
+                  <label className="block text-xs font-medium text-zinc-400 mb-1.5 uppercase tracking-wider">
+                    Password
                   </label>
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="Recipient will need this password to decrypt"
+                    className="w-full px-4 py-2.5 border border-zinc-700 rounded-xl bg-zinc-800/50 text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors text-sm"
+                    placeholder="Optional — adds extra protection"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Expiration Date (optional)
+                  <label className="block text-xs font-medium text-zinc-400 mb-1.5 uppercase tracking-wider">
+                    Expires
                   </label>
                   <input
                     type="datetime-local"
                     value={expiration}
                     onChange={(e) => setExpiration(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    className="w-full px-4 py-2.5 border border-zinc-700 rounded-xl bg-zinc-800/50 text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors text-sm"
                   />
                 </div>
 
                 <button
                   onClick={handleUpload}
                   disabled={uploading}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-3 px-6 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm mt-2"
                 >
-                  {uploading ? 'Uploading...' : 'Upload & Generate Link'}
+                  {uploading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin"></div>
+                      Encrypting & uploading...
+                    </span>
+                  ) : (
+                    'Flash it'
+                  )}
                 </button>
               </div>
             )}
           </div>
         ) : (
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 md:p-8">
+          /* Share link result */
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 md:p-8 backdrop-blur-sm">
             <div className="text-center mb-6">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full mb-4">
-                <svg className="w-8 h-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="inline-flex items-center justify-center w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl mb-4">
+                <svg className="w-7 h-7 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                Share Link Ready!
+              <h2 className="text-xl font-bold text-white mb-1">
+                Link ready
               </h2>
-              <p className="text-gray-600 dark:text-gray-300">
+              <p className="text-sm text-zinc-500">
                 {audienceEmail
                   ? `Restricted to ${audienceEmail}`
                   : 'Anyone with this link can access the file'}
-                {password && ' (password required)'}
+                {password && ' — password protected'}
               </p>
             </div>
 
-            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 mb-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400 break-all">{shareLink}</p>
+            <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 mb-4">
+              <p className="text-xs text-zinc-400 break-all font-mono leading-relaxed">{shareLink}</p>
             </div>
 
             <div className="flex gap-3">
               <button
                 onClick={copyLink}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                className="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-3 px-6 rounded-xl transition-all text-sm"
               >
-                Copy Link
+                Copy link
               </button>
               <button
                 onClick={reset}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-900 dark:text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                className="flex-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors text-sm"
               >
-                Upload Another
+                New file
               </button>
             </div>
           </div>
         )}
+
+        {/* Footer */}
+        <div className="text-center mt-8">
+          <p className="text-xs text-zinc-700">
+            End-to-end encrypted. Decentralized storage. No accounts needed to view.
+          </p>
+        </div>
       </div>
     </div>
   )

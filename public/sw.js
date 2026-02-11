@@ -1,4 +1,4 @@
-const CACHE_NAME = 'storacha-share-v1'
+const CACHE_NAME = 'flash-v1'
 const urlsToCache = [
   '/',
   '/view',
@@ -7,6 +7,7 @@ const urlsToCache = [
 ]
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting()
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(urlsToCache))
@@ -14,16 +15,27 @@ self.addEventListener('install', (event) => {
   )
 })
 
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(
+        names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name))
+      )
+    )
+  )
+})
+
 self.addEventListener('fetch', (event) => {
-  // Only cache GET requests for same-origin resources
   if (event.request.method !== 'GET') return
   if (new URL(event.request.url).origin !== self.location.origin) return
 
   event.respondWith(
-    caches.match(event.request)
-      .then((response) => response || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const clone = response.clone()
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone))
+        return response
+      })
+      .catch(() => caches.match(event.request))
   )
 })
-
-
-
