@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { decryptFile, decryptFileWithPassword, base64ToArrayBuffer } from '../utils/encryption'
-import { downloadFromStoracha, extractShareDelegation, getAgentDID } from '../utils/storacha'
+import { downloadFromStoracha, extractShareDelegation, verifyViewerEmail } from '../utils/storacha'
 
 export default function View() {
   const [searchParams] = useSearchParams()
@@ -9,27 +9,24 @@ export default function View() {
   const [error, setError] = useState(null)
   const [errorType, setErrorType] = useState(null)
   const [fileData, setFileData] = useState(null)
-  const [viewerDID, setViewerDID] = useState('')
   const [needsPassword, setNeedsPassword] = useState(false)
   const [viewPassword, setViewPassword] = useState('')
   const [delegationData, setDelegationData] = useState(null)
   const [encryptedData, setEncryptedData] = useState(null)
-  const [cid, setCid] = useState(null)
   const [filename, setFilename] = useState('file')
   const [fileType, setFileType] = useState('application/octet-stream')
+  const [needsEmailVerification, setNeedsEmailVerification] = useState(false)
+  const [verificationEmail, setVerificationEmail] = useState('')
+  const [verifying, setVerifying] = useState(false)
 
   useEffect(() => {
     const loadFile = async () => {
       try {
-        const did = await getAgentDID()
-        setViewerDID(did)
-
         const cidParam = searchParams.get('cid')
         const delegationBase64 = searchParams.get('d')
         const filenameParam = searchParams.get('filename') || 'file'
         const fileTypeParam = searchParams.get('type') || 'application/octet-stream'
 
-        setCid(cidParam)
         setFilename(filenameParam)
         setFileType(fileTypeParam)
 
@@ -37,7 +34,16 @@ export default function View() {
           throw new Error('Missing required parameters')
         }
 
-        const extracted = await extractShareDelegation(delegationBase64, did)
+        const extracted = await extractShareDelegation(delegationBase64)
+
+        if (extracted.restricted) {
+          const data = await downloadFromStoracha(cidParam)
+          setEncryptedData(data)
+          setDelegationData(extracted)
+          setNeedsEmailVerification(true)
+          setLoading(false)
+          return
+        }
 
         if (extracted.passwordProtected) {
           const data = await downloadFromStoracha(cidParam)
@@ -67,9 +73,6 @@ export default function View() {
         if (err.message === 'expired') {
           setErrorType('expired')
           setError('This share link has expired')
-        } else if (err.message === 'unauthorized') {
-          setErrorType('unauthorized')
-          setError('You are not authorized to view this file. This link was shared with a different recipient.')
         } else if (err.message === 'tampered') {
           setErrorType('tampered')
           setError('This share link has been tampered with and cannot be trusted.')
@@ -77,14 +80,55 @@ export default function View() {
           setError(err.message || 'Failed to load file')
         }
       } finally {
-        if (!needsPassword) {
-          setLoading(false)
-        }
+        setLoading(false)
       }
     }
 
     loadFile()
   }, [searchParams])
+
+  const handleEmailVerification = async () => {
+    if (!verificationEmail || !delegationData) return
+
+    setVerifying(true)
+    setError(null)
+    try {
+      const accountDID = await verifyViewerEmail(verificationEmail)
+
+      if (accountDID !== delegationData.audienceDID) {
+        setError('This file was not shared with this email address.')
+        setVerifying(false)
+        return
+      }
+
+      if (delegationData.passwordProtected) {
+        setNeedsEmailVerification(false)
+        setNeedsPassword(true)
+        setVerifying(false)
+        return
+      }
+
+      const key = base64ToArrayBuffer(delegationData.key)
+      const iv = base64ToArrayBuffer(delegationData.iv)
+
+      const decrypted = await decryptFile(
+        new Uint8Array(encryptedData),
+        key,
+        new Uint8Array(iv)
+      )
+
+      setFileData({
+        data: decrypted,
+        filename,
+        type: fileType
+      })
+      setNeedsEmailVerification(false)
+    } catch (err) {
+      setError('Email verification failed. Check your inbox and approve the login.')
+    } finally {
+      setVerifying(false)
+    }
+  }
 
   const handlePasswordSubmit = async () => {
     if (!viewPassword || !delegationData || !encryptedData) return
@@ -124,22 +168,16 @@ export default function View() {
     URL.revokeObjectURL(url)
   }
 
-  const copyDID = () => {
-    navigator.clipboard.writeText(viewerDID)
-    alert('DID copied to clipboard!')
-  }
-
   const isImage = fileData?.type?.startsWith('image/')
   const isVideo = fileData?.type?.startsWith('video/')
   const isPdf = fileData?.type === 'application/pdf'
 
   const errorTitles = {
     expired: 'Link Expired',
-    unauthorized: 'Access Denied',
     tampered: 'Invalid Link'
   }
 
-  if (loading && !needsPassword) {
+  if (loading && !needsPassword && !needsEmailVerification) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
         <div className="text-center">
@@ -150,16 +188,59 @@ export default function View() {
     )
   }
 
+  if (needsEmailVerification && !fileData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center px-4">
+        <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md w-full">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-100 dark:bg-indigo-900 rounded-full mb-4">
+              <svg className="w-8 h-8 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Email Verification Required</h2>
+            <p className="text-gray-600 dark:text-gray-300">
+              This file was shared with <span className="font-semibold">{delegationData?.audienceEmail}</span>
+            </p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              Enter your email to verify your identity via Storacha
+            </p>
+          </div>
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+            </div>
+          )}
+          <div className="space-y-3">
+            <input
+              type="email"
+              value={verificationEmail}
+              onChange={(e) => { setVerificationEmail(e.target.value); setError(null) }}
+              onKeyDown={(e) => e.key === 'Enter' && handleEmailVerification()}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              placeholder="Enter your email address"
+              autoFocus
+            />
+            <button
+              onClick={handleEmailVerification}
+              disabled={!verificationEmail || verifying}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {verifying ? 'Verifying...' : 'Verify Email'}
+            </button>
+            <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+              You will receive a verification email from Storacha. Approve it to continue.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (needsPassword && !fileData) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center px-4">
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md w-full">
-          {viewerDID && (
-            <div className="mb-6 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Your DID</p>
-              <p className="text-xs text-gray-700 dark:text-gray-300 truncate font-mono">{viewerDID}</p>
-            </div>
-          )}
           <div className="text-center mb-6">
             <div className="inline-flex items-center justify-center w-16 h-16 bg-yellow-100 dark:bg-yellow-900 rounded-full mb-4">
               <svg className="w-8 h-8 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -197,20 +278,10 @@ export default function View() {
     )
   }
 
-  if (error && !needsPassword) {
+  if (error) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center px-4">
         <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
-          {viewerDID && errorType === 'unauthorized' && (
-            <div className="mb-6 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg text-left">
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Your DID</p>
-              <div className="flex items-center gap-2">
-                <p className="text-xs text-gray-700 dark:text-gray-300 truncate font-mono flex-1">{viewerDID}</p>
-                <button onClick={copyDID} className="text-xs text-indigo-600 hover:text-indigo-700 shrink-0">Copy</button>
-              </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Share this DID with the sender so they can grant you access</p>
-            </div>
-          )}
           <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 dark:bg-red-900 rounded-full mb-4">
             <svg className="w-8 h-8 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

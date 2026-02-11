@@ -1,19 +1,18 @@
 import { useState, useRef, useEffect } from 'react'
 import { encryptFile, arrayBufferToBase64 } from '../utils/encryption'
-import { uploadToStoracha, createShareDelegation, authorizeClient, isClientAuthorized, getAgentDID } from '../utils/storacha'
+import { uploadToStoracha, createShareDelegation, authorizeClient, isClientAuthorized } from '../utils/storacha'
 
 export default function Upload() {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [shareLink, setShareLink] = useState(null)
   const [expiration, setExpiration] = useState('')
-  const [audienceDID, setAudienceDID] = useState('')
+  const [audienceEmail, setAudienceEmail] = useState('')
   const [password, setPassword] = useState('')
   const [email, setEmail] = useState('')
   const [authorized, setAuthorized] = useState(false)
   const [authorizing, setAuthorizing] = useState(false)
   const [checkingAuth, setCheckingAuth] = useState(true)
-  const [agentDID, setAgentDID] = useState('')
   const fileInputRef = useRef(null)
   const [dragActive, setDragActive] = useState(false)
 
@@ -39,8 +38,6 @@ export default function Upload() {
   useEffect(() => {
     const init = async () => {
       try {
-        const did = await getAgentDID()
-        setAgentDID(did)
         const isAuth = await isClientAuthorized()
         setAuthorized(isAuth)
       } catch (error) {
@@ -99,7 +96,7 @@ export default function Upload() {
       const delegationOptions = {
         iv: arrayBufferToBase64(encrypted.iv),
         passwordProtected: encrypted.passwordProtected,
-        audienceDID: audienceDID || null,
+        audienceEmail: audienceEmail.trim() || null,
         expiration: expDate
       }
 
@@ -132,16 +129,11 @@ export default function Upload() {
     alert('Link copied to clipboard!')
   }
 
-  const copyDID = () => {
-    navigator.clipboard.writeText(agentDID)
-    alert('DID copied to clipboard!')
-  }
-
   const reset = () => {
     setFile(null)
     setShareLink(null)
     setExpiration('')
-    setAudienceDID('')
+    setAudienceEmail('')
     setPassword('')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -161,23 +153,6 @@ export default function Upload() {
             Encrypted, permanent, and controlled by you
           </p>
         </div>
-
-        {agentDID && (
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-4 mb-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Your DID</p>
-                <p className="text-xs text-gray-700 dark:text-gray-300 truncate font-mono">{agentDID}</p>
-              </div>
-              <button
-                onClick={copyDID}
-                className="shrink-0 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 px-3 py-1.5 rounded-lg transition-colors"
-              >
-                Copy
-              </button>
-            </div>
-          </div>
-        )}
 
         {!shareLink ? (
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 md:p-8">
@@ -258,17 +233,17 @@ export default function Upload() {
               <div className="mt-6 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Recipient DID (leave empty for anyone with the link)
+                    Recipient Email (leave empty for anyone with the link)
                   </label>
                   <input
-                    type="text"
-                    value={audienceDID}
-                    onChange={(e) => setAudienceDID(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
-                    placeholder="did:key:z6Mk..."
+                    type="email"
+                    value={audienceEmail}
+                    onChange={(e) => setAudienceEmail(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="recipient@email.com"
                   />
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Ask the recipient to copy their DID from the app and share it with you
+                    Only this person will be able to view the file after verifying their email
                   </p>
                 </div>
 
@@ -319,8 +294,8 @@ export default function Upload() {
                 Share Link Ready!
               </h2>
               <p className="text-gray-600 dark:text-gray-300">
-                {audienceDID
-                  ? 'This link is restricted to the specified recipient'
+                {audienceEmail
+                  ? `Restricted to ${audienceEmail}`
                   : 'Anyone with this link can access the file'}
                 {password && ' (password required)'}
               </p>

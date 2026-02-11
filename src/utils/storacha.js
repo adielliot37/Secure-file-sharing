@@ -1,6 +1,8 @@
 import { create } from '@storacha/client'
 import * as DelegationCore from '@ucanto/core/delegation'
 import * as ed25519 from '@ucanto/principal/ed25519'
+import { from as absentee } from '@ucanto/principal/absentee'
+import { fromEmail, toEmail } from '@storacha/did-mailto'
 import { verifySignature, isExpired } from '@ipld/dag-ucan'
 
 let client = null
@@ -15,11 +17,6 @@ export async function getClient() {
     throw error
   }
   return client
-}
-
-export async function getAgentDID() {
-  const client = await getClient()
-  return client.agent.did()
 }
 
 export async function authorizeClient(email) {
@@ -105,12 +102,13 @@ export async function downloadFromStoracha(cid) {
   throw new Error('Failed to fetch file from any gateway')
 }
 
-export async function createShareDelegation({ key, iv, salt, passwordProtected, audienceDID, expiration }) {
+export async function createShareDelegation({ key, iv, salt, passwordProtected, audienceEmail, expiration }) {
   const client = await getClient()
 
   let audience
-  if (audienceDID) {
-    audience = ed25519.Verifier.parse(audienceDID)
+  if (audienceEmail) {
+    const didMailto = fromEmail(audienceEmail)
+    audience = absentee({ id: didMailto })
   } else {
     audience = await ed25519.generate()
   }
@@ -126,7 +124,7 @@ export async function createShareDelegation({ key, iv, salt, passwordProtected, 
   } else {
     facts[0].key = key
   }
-  if (audienceDID) {
+  if (audienceEmail) {
     facts[0].restricted = true
   }
 
@@ -146,7 +144,7 @@ export async function createShareDelegation({ key, iv, salt, passwordProtected, 
   return uint8ArrayToBase64(archive.ok)
 }
 
-export async function extractShareDelegation(base64String, viewerDID) {
+export async function extractShareDelegation(base64String) {
   const bytes = base64ToUint8Array(base64String)
   const result = await DelegationCore.extract(bytes)
   if (result.error) {
@@ -154,10 +152,13 @@ export async function extractShareDelegation(base64String, viewerDID) {
   }
   const delegation = result.ok
 
-  const issuerVerifier = ed25519.Verifier.parse(delegation.issuer.did())
-  const signatureOk = await verifySignature(delegation.data, issuerVerifier)
-  if (!signatureOk) {
-    throw new Error('tampered')
+  const issuerDID = delegation.issuer.did()
+  if (issuerDID.startsWith('did:key:')) {
+    const issuerVerifier = ed25519.Verifier.parse(issuerDID)
+    const signatureOk = await verifySignature(delegation.data, issuerVerifier)
+    if (!signatureOk) {
+      throw new Error('tampered')
+    }
   }
 
   if (isExpired(delegation.data)) {
@@ -169,21 +170,24 @@ export async function extractShareDelegation(base64String, viewerDID) {
     throw new Error('Invalid share link: missing data')
   }
 
-  if (facts[0].restricted) {
-    if (!viewerDID) {
-      throw new Error('unauthorized')
-    }
-    if (delegation.audience.did() !== viewerDID) {
-      throw new Error('unauthorized')
-    }
-  }
+  const isRestricted = !!facts[0].restricted
+  const audienceDID = delegation.audience.did()
 
   return {
     key: facts[0].key || null,
     iv: facts[0].iv,
     salt: facts[0].salt || null,
-    passwordProtected: !!facts[0].passwordProtected
+    passwordProtected: !!facts[0].passwordProtected,
+    restricted: isRestricted,
+    audienceDID: isRestricted ? audienceDID : null,
+    audienceEmail: isRestricted && audienceDID.startsWith('did:mailto:') ? toEmail(audienceDID) : null
   }
+}
+
+export async function verifyViewerEmail(email) {
+  const client = await getClient()
+  const account = await client.login(email)
+  return account.did()
 }
 
 function uint8ArrayToBase64(bytes) {
