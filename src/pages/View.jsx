@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { decryptFile, base64ToArrayBuffer } from '../utils/encryption'
-import { downloadFromStoracha, decodeUCAN } from '../utils/storacha'
+import { downloadFromStoracha, extractShareDelegation } from '../utils/storacha'
 
 export default function View() {
   const [searchParams] = useSearchParams()
@@ -14,40 +14,15 @@ export default function View() {
     const loadFile = async () => {
       try {
         const cid = searchParams.get('cid')
-        const keyBase64 = searchParams.get('key')
-        const ivBase64 = searchParams.get('iv')
-        const proofBase64 = searchParams.get('proof')
+        const delegationBase64 = searchParams.get('d')
         const filename = searchParams.get('filename') || 'file'
         const fileType = searchParams.get('type') || 'application/octet-stream'
-        const exp = searchParams.get('exp')
 
-        if (!cid || !keyBase64 || !ivBase64) {
+        if (!cid || !delegationBase64) {
           throw new Error('Missing required parameters')
         }
 
-        if (exp) {
-          const expTime = parseInt(exp) * 1000
-          if (Date.now() > expTime) {
-            setExpired(true)
-            setError('This link has expired')
-            setLoading(false)
-            return
-          }
-        }
-
-        if (proofBase64) {
-          try {
-            const proof = decodeUCAN(proofBase64)
-            if (proof.exp && proof.exp * 1000 < Date.now()) {
-              setExpired(true)
-              setError('This link has expired')
-              setLoading(false)
-              return
-            }
-          } catch (e) {
-            console.warn('Could not verify UCAN proof:', e)
-          }
-        }
+        const { key: keyBase64, iv: ivBase64 } = await extractShareDelegation(delegationBase64)
 
         const encryptedData = await downloadFromStoracha(cid)
         const key = base64ToArrayBuffer(keyBase64)
@@ -65,7 +40,12 @@ export default function View() {
           type: fileType
         })
       } catch (err) {
-        setError(err.message || 'Failed to load file')
+        if (err.message === 'expired') {
+          setExpired(true)
+          setError('This share link has expired')
+        } else {
+          setError(err.message || 'Failed to load file')
+        }
       } finally {
         setLoading(false)
       }
@@ -76,7 +56,6 @@ export default function View() {
 
   const downloadFile = () => {
     if (!fileData) return
-
     const blob = new Blob([fileData.data], { type: fileData.type })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -217,4 +196,3 @@ export default function View() {
     </div>
   )
 }
-

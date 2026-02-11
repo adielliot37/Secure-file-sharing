@@ -15,10 +15,15 @@ self.addEventListener('install', (event) => {
 })
 
 self.addEventListener('fetch', (event) => {
+  // Only cache GET requests for same-origin resources
+  if (event.request.method !== 'GET') return
+  if (new URL(event.request.url).origin !== self.location.origin) return
+
   event.respondWith(
     caches.match(event.request)
       .then((response) => response || fetch(event.request))
-      .catch(() => {})
   )
 })
+
+
 

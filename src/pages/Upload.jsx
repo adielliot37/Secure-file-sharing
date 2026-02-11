@@ -1,14 +1,17 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { encryptFile, arrayBufferToBase64 } from '../utils/encryption'
-import { uploadToStoracha, createDelegation, encodeUCAN } from '../utils/storacha'
+import { uploadToStoracha, createShareDelegation, authorizeClient, isClientAuthorized } from '../utils/storacha'
 
 export default function Upload() {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [shareLink, setShareLink] = useState(null)
   const [expiration, setExpiration] = useState('')
-  const [audience, setAudience] = useState('')
   const [password, setPassword] = useState('')
+  const [email, setEmail] = useState('')
+  const [authorized, setAuthorized] = useState(false)
+  const [authorizing, setAuthorizing] = useState(false)
+  const [checkingAuth, setCheckingAuth] = useState(true)
   const fileInputRef = useRef(null)
   const [dragActive, setDragActive] = useState(false)
 
@@ -26,9 +29,43 @@ export default function Upload() {
     e.preventDefault()
     e.stopPropagation()
     setDragActive(false)
-    
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       setFile(e.dataTransfer.files[0])
+    }
+  }
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const isAuth = await isClientAuthorized()
+        setAuthorized(isAuth)
+      } catch (error) {
+        setAuthorized(false)
+      } finally {
+        setCheckingAuth(false)
+      }
+    }
+    checkAuth()
+  }, [])
+
+  const handleAuthorize = async () => {
+    if (!email) {
+      alert('Please enter an email address')
+      return
+    }
+    setAuthorizing(true)
+    try {
+      const result = await authorizeClient(email)
+      if (result.success) {
+        setAuthorized(true)
+        alert(result.message)
+      } else {
+        alert(result.message)
+      }
+    } catch (error) {
+      alert(`Authorization failed: ${error.message}`)
+    } finally {
+      setAuthorizing(false)
     }
   }
 
@@ -40,45 +77,40 @@ export default function Upload() {
 
   const handleUpload = async () => {
     if (!file) return
+    if (!authorized) {
+      alert('Please authorize your Storacha client first by entering your email address.')
+      return
+    }
 
     setUploading(true)
     try {
       const encrypted = await encryptFile(file, password || null)
       const encryptedBlob = new Blob([encrypted.encrypted])
-      
       const cid = await uploadToStoracha(encryptedBlob, `encrypted-${file.name}`)
-      
-      const expDate = expiration 
-        ? new Date(expiration)
-        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
-      
-      const delegation = await createDelegation({
-        audience: audience || null,
-        expiration: expDate,
-        scope: cid
-      })
 
       const keyBase64 = arrayBufferToBase64(encrypted.key)
       const ivBase64 = arrayBufferToBase64(encrypted.iv)
-      const proofBase64 = encodeUCAN(delegation.proof)
-      
-      const params = new URLSearchParams({
-        cid,
+
+      const expDate = expiration
+        ? new Date(expiration)
+        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+
+      const delegationBase64 = await createShareDelegation({
         key: keyBase64,
         iv: ivBase64,
-        proof: proofBase64,
+        expiration: expDate
+      })
+
+      const params = new URLSearchParams({
+        cid,
+        d: delegationBase64,
         filename: file.name,
         type: file.type
       })
-      
-      if (expiration) {
-        params.append('exp', Math.floor(expDate.getTime() / 1000).toString())
-      }
-      
+
       const link = `${window.location.origin}/view?${params.toString()}`
       setShareLink(link)
     } catch (error) {
-      console.error('Upload failed:', error)
       alert('Upload failed: ' + error.message)
     } finally {
       setUploading(false)
@@ -94,12 +126,13 @@ export default function Upload() {
     setFile(null)
     setShareLink(null)
     setExpiration('')
-    setAudience('')
     setPassword('')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
+
+  const isFileInputDisabled = checkingAuth || !authorized
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
@@ -115,6 +148,43 @@ export default function Upload() {
 
         {!shareLink ? (
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 md:p-8">
+            {checkingAuth ? (
+              <div className="text-center py-8">
+                <p className="text-gray-600 dark:text-gray-300">Checking authorization...</p>
+              </div>
+            ) : !authorized ? (
+              <div className="mb-6 p-6 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                  Authorization Required
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                  To upload files to Storacha, you need to authorize your client with an email address.
+                  This will register your Space and enable uploads.
+                </p>
+                <div className="space-y-3">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="Enter your email address"
+                  />
+                  <button
+                    onClick={handleAuthorize}
+                    disabled={authorizing || !email}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {authorizing ? 'Authorizing...' : 'Authorize Storacha Client'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-6 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                <p className="text-sm text-green-700 dark:text-green-300">
+                  Storacha client authorized and ready to upload
+                </p>
+              </div>
+            )}
             <div
               className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
                 dragActive
@@ -132,10 +202,11 @@ export default function Upload() {
                 onChange={handleFileSelect}
                 className="hidden"
                 id="file-input"
+                disabled={isFileInputDisabled}
               />
               <label
                 htmlFor="file-input"
-                className="cursor-pointer block"
+                className={isFileInputDisabled ? "cursor-not-allowed opacity-50 block" : "cursor-pointer block"}
               >
                 <svg
                   className="mx-auto h-12 w-12 text-gray-400 mb-4"
@@ -185,19 +256,6 @@ export default function Upload() {
                     value={expiration}
                     onChange={(e) => setExpiration(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Audience DID (optional - leave empty for anyone)
-                  </label>
-                  <input
-                    type="text"
-                    value={audience}
-                    onChange={(e) => setAudience(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="did:key:..."
                   />
                 </div>
 
@@ -263,4 +321,3 @@ export default function Upload() {
     </div>
   )
 }
-
