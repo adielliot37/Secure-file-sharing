@@ -1,17 +1,19 @@
 import { useState, useRef, useEffect } from 'react'
 import { encryptFile, arrayBufferToBase64 } from '../utils/encryption'
-import { uploadToStoracha, createShareDelegation, authorizeClient, isClientAuthorized } from '../utils/storacha'
+import { uploadToStoracha, createShareDelegation, authorizeClient, isClientAuthorized, getAgentDID } from '../utils/storacha'
 
 export default function Upload() {
   const [file, setFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [shareLink, setShareLink] = useState(null)
   const [expiration, setExpiration] = useState('')
+  const [audienceDID, setAudienceDID] = useState('')
   const [password, setPassword] = useState('')
   const [email, setEmail] = useState('')
   const [authorized, setAuthorized] = useState(false)
   const [authorizing, setAuthorizing] = useState(false)
   const [checkingAuth, setCheckingAuth] = useState(true)
+  const [agentDID, setAgentDID] = useState('')
   const fileInputRef = useRef(null)
   const [dragActive, setDragActive] = useState(false)
 
@@ -35,8 +37,10 @@ export default function Upload() {
   }
 
   useEffect(() => {
-    const checkAuth = async () => {
+    const init = async () => {
       try {
+        const did = await getAgentDID()
+        setAgentDID(did)
         const isAuth = await isClientAuthorized()
         setAuthorized(isAuth)
       } catch (error) {
@@ -45,7 +49,7 @@ export default function Upload() {
         setCheckingAuth(false)
       }
     }
-    checkAuth()
+    init()
   }, [])
 
   const handleAuthorize = async () => {
@@ -78,7 +82,7 @@ export default function Upload() {
   const handleUpload = async () => {
     if (!file) return
     if (!authorized) {
-      alert('Please authorize your Storacha client first by entering your email address.')
+      alert('Please authorize your Storacha client first.')
       return
     }
 
@@ -88,18 +92,24 @@ export default function Upload() {
       const encryptedBlob = new Blob([encrypted.encrypted])
       const cid = await uploadToStoracha(encryptedBlob, `encrypted-${file.name}`)
 
-      const keyBase64 = arrayBufferToBase64(encrypted.key)
-      const ivBase64 = arrayBufferToBase64(encrypted.iv)
-
       const expDate = expiration
         ? new Date(expiration)
         : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
 
-      const delegationBase64 = await createShareDelegation({
-        key: keyBase64,
-        iv: ivBase64,
+      const delegationOptions = {
+        iv: arrayBufferToBase64(encrypted.iv),
+        passwordProtected: encrypted.passwordProtected,
+        audienceDID: audienceDID || null,
         expiration: expDate
-      })
+      }
+
+      if (encrypted.passwordProtected) {
+        delegationOptions.salt = arrayBufferToBase64(encrypted.salt)
+      } else {
+        delegationOptions.key = arrayBufferToBase64(encrypted.key)
+      }
+
+      const delegationBase64 = await createShareDelegation(delegationOptions)
 
       const params = new URLSearchParams({
         cid,
@@ -122,10 +132,16 @@ export default function Upload() {
     alert('Link copied to clipboard!')
   }
 
+  const copyDID = () => {
+    navigator.clipboard.writeText(agentDID)
+    alert('DID copied to clipboard!')
+  }
+
   const reset = () => {
     setFile(null)
     setShareLink(null)
     setExpiration('')
+    setAudienceDID('')
     setPassword('')
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -146,6 +162,23 @@ export default function Upload() {
           </p>
         </div>
 
+        {agentDID && (
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-4 mb-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400">Your DID</p>
+                <p className="text-xs text-gray-700 dark:text-gray-300 truncate font-mono">{agentDID}</p>
+              </div>
+              <button
+                onClick={copyDID}
+                className="shrink-0 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 px-3 py-1.5 rounded-lg transition-colors"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        )}
+
         {!shareLink ? (
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 md:p-8">
             {checkingAuth ? (
@@ -159,7 +192,6 @@ export default function Upload() {
                 </h3>
                 <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
                   To upload files to Storacha, you need to authorize your client with an email address.
-                  This will register your Space and enable uploads.
                 </p>
                 <div className="space-y-3">
                   <input
@@ -208,18 +240,8 @@ export default function Upload() {
                 htmlFor="file-input"
                 className={isFileInputDisabled ? "cursor-not-allowed opacity-50 block" : "cursor-pointer block"}
               >
-                <svg
-                  className="mx-auto h-12 w-12 text-gray-400 mb-4"
-                  stroke="currentColor"
-                  fill="none"
-                  viewBox="0 0 48 48"
-                >
-                  <path
-                    d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
+                <svg className="mx-auto h-12 w-12 text-gray-400 mb-4" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                  <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
                 <p className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">
                   {file ? file.name : 'Drop file here or click to select'}
@@ -236,6 +258,22 @@ export default function Upload() {
               <div className="mt-6 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Recipient DID (leave empty for anyone with the link)
+                  </label>
+                  <input
+                    type="text"
+                    value={audienceDID}
+                    onChange={(e) => setAudienceDID(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
+                    placeholder="did:key:z6Mk..."
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Ask the recipient to copy their DID from the app and share it with you
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Password (optional)
                   </label>
                   <input
@@ -243,7 +281,7 @@ export default function Upload() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    placeholder="Leave empty for random key"
+                    placeholder="Recipient will need this password to decrypt"
                   />
                 </div>
 
@@ -273,32 +311,23 @@ export default function Upload() {
           <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl p-6 md:p-8">
             <div className="text-center mb-6">
               <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 dark:bg-green-900 rounded-full mb-4">
-                <svg
-                  className="w-8 h-8 text-green-600 dark:text-green-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M5 13l4 4L19 7"
-                  />
+                <svg className="w-8 h-8 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               </div>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
                 Share Link Ready!
               </h2>
               <p className="text-gray-600 dark:text-gray-300">
-                Copy and share this link securely
+                {audienceDID
+                  ? 'This link is restricted to the specified recipient'
+                  : 'Anyone with this link can access the file'}
+                {password && ' (password required)'}
               </p>
             </div>
 
             <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 mb-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400 break-all">
-                {shareLink}
-              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 break-all">{shareLink}</p>
             </div>
 
             <div className="flex gap-3">

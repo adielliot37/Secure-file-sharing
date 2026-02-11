@@ -1,30 +1,37 @@
 export async function encryptFile(file, password = null) {
-  const key = password 
-    ? await deriveKeyFromPassword(password)
-    : await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt', 'decrypt']
-      )
+  let key
+  let salt = null
+
+  if (password) {
+    salt = crypto.getRandomValues(new Uint8Array(16))
+    key = await deriveKeyFromPassword(password, salt)
+  } else {
+    key = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt']
+    )
+  }
 
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const fileBuffer = await file.arrayBuffer()
-  
+
   const encrypted = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     key,
     fileBuffer
   )
 
-  const exportedKey = await crypto.subtle.exportKey('raw', key)
-  
+  const exportedKey = password
+    ? null
+    : new Uint8Array(await crypto.subtle.exportKey('raw', key))
+
   return {
     encrypted: new Uint8Array(encrypted),
-    key: new Uint8Array(exportedKey),
+    key: exportedKey,
     iv,
-    filename: file.name,
-    type: file.type,
-    size: file.size
+    salt,
+    passwordProtected: !!password
   }
 }
 
@@ -46,10 +53,24 @@ export async function decryptFile(encryptedData, key, iv) {
   return new Uint8Array(decrypted)
 }
 
-async function deriveKeyFromPassword(password) {
+export async function decryptFileWithPassword(encryptedData, password, saltBase64, ivBase64) {
+  const salt = new Uint8Array(base64ToArrayBuffer(saltBase64))
+  const iv = new Uint8Array(base64ToArrayBuffer(ivBase64))
+  const key = await deriveKeyFromPassword(password, salt)
+
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encryptedData
+  )
+
+  return new Uint8Array(decrypted)
+}
+
+async function deriveKeyFromPassword(password, salt) {
   const encoder = new TextEncoder()
   const passwordData = encoder.encode(password)
-  
+
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
     passwordData,
@@ -61,13 +82,13 @@ async function deriveKeyFromPassword(password) {
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      salt: encoder.encode('storacha-share-salt'),
+      salt,
       iterations: 100000,
       hash: 'SHA-256'
     },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
-    true,
+    false,
     ['encrypt', 'decrypt']
   )
 }
@@ -89,6 +110,3 @@ export function base64ToArrayBuffer(base64) {
   }
   return bytes.buffer
 }
-
-
-

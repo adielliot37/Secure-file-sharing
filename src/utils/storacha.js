@@ -1,6 +1,7 @@
 import { create } from '@storacha/client'
 import * as DelegationCore from '@ucanto/core/delegation'
 import * as ed25519 from '@ucanto/principal/ed25519'
+import { verifySignature, isExpired } from '@ipld/dag-ucan'
 
 let client = null
 let isAuthorized = false
@@ -14,6 +15,11 @@ export async function getClient() {
     throw error
   }
   return client
+}
+
+export async function getAgentDID() {
+  const client = await getClient()
+  return client.agent.did()
 }
 
 export async function authorizeClient(email) {
@@ -99,19 +105,37 @@ export async function downloadFromStoracha(cid) {
   throw new Error('Failed to fetch file from any gateway')
 }
 
-export async function createShareDelegation({ key, iv, expiration }) {
+export async function createShareDelegation({ key, iv, salt, passwordProtected, audienceDID, expiration }) {
   const client = await getClient()
-  const audience = await ed25519.generate()
+
+  let audience
+  if (audienceDID) {
+    audience = ed25519.Verifier.parse(audienceDID)
+  } else {
+    audience = await ed25519.generate()
+  }
+
   const exp = expiration
     ? Math.floor(expiration.getTime() / 1000)
     : Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365
+
+  const facts = [{ iv }]
+  if (passwordProtected) {
+    facts[0].salt = salt
+    facts[0].passwordProtected = true
+  } else {
+    facts[0].key = key
+  }
+  if (audienceDID) {
+    facts[0].restricted = true
+  }
 
   const delegation = await client.createDelegation(
     audience,
     ['upload/list'],
     {
       expiration: exp,
-      facts: [{ key, iv }]
+      facts
     }
   )
 
@@ -122,7 +146,7 @@ export async function createShareDelegation({ key, iv, expiration }) {
   return uint8ArrayToBase64(archive.ok)
 }
 
-export async function extractShareDelegation(base64String) {
+export async function extractShareDelegation(base64String, viewerDID) {
   const bytes = base64ToUint8Array(base64String)
   const result = await DelegationCore.extract(bytes)
   if (result.error) {
@@ -130,20 +154,35 @@ export async function extractShareDelegation(base64String) {
   }
   const delegation = result.ok
 
-  if (delegation.expiration !== undefined && delegation.expiration !== Infinity) {
-    if (Date.now() / 1000 > delegation.expiration) {
-      throw new Error('expired')
-    }
+  const issuerVerifier = ed25519.Verifier.parse(delegation.issuer.did())
+  const signatureOk = await verifySignature(delegation.data, issuerVerifier)
+  if (!signatureOk) {
+    throw new Error('tampered')
+  }
+
+  if (isExpired(delegation.data)) {
+    throw new Error('expired')
   }
 
   const facts = delegation.facts
-  if (!facts || !facts.length || !facts[0].key || !facts[0].iv) {
-    throw new Error('Invalid share link: missing encryption data')
+  if (!facts || !facts.length || !facts[0].iv) {
+    throw new Error('Invalid share link: missing data')
+  }
+
+  if (facts[0].restricted) {
+    if (!viewerDID) {
+      throw new Error('unauthorized')
+    }
+    if (delegation.audience.did() !== viewerDID) {
+      throw new Error('unauthorized')
+    }
   }
 
   return {
-    key: facts[0].key,
-    iv: facts[0].iv
+    key: facts[0].key || null,
+    iv: facts[0].iv,
+    salt: facts[0].salt || null,
+    passwordProtected: !!facts[0].passwordProtected
   }
 }
 
