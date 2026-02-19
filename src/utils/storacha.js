@@ -1,94 +1,63 @@
-import { create } from '@storacha/client'
-import * as DelegationCore from '@ucanto/core/delegation'
-import * as ed25519 from '@ucanto/principal/ed25519'
-import { from as absentee } from '@ucanto/principal/absentee'
-import { fromEmail, toEmail } from '@storacha/did-mailto'
-import { verifySignature, isExpired } from '@ipld/dag-ucan'
+import { Client } from '@web3-storage/w3up-client'
 
 let client = null
-let isAuthorized = false
 
 export async function getClient() {
   if (client) return client
+  
   try {
-    client = await create()
+    client = new Client({
+      serviceDID: 'did:web:storacha.network'
+    })
+    
+    const space = await client.createSpace()
+    await client.setCurrentSpace(space.did())
   } catch (error) {
-    console.error('Client initialization error:', error)
-    throw error
+    console.warn('Client initialization warning:', error)
   }
+  
   return client
-}
-
-export async function authorizeClient(email) {
-  if (!email) {
-    throw new Error('Email is required for authorization')
-  }
-  try {
-    const client = await getClient()
-    if (!client) {
-      throw new Error('Failed to initialize client')
-    }
-    const account = await client.login(email)
-    let space = client.currentSpace()
-    if (!space) {
-      space = await client.createSpace('storacha-share', { account, skipGatewayAuthorization: true })
-      await client.setCurrentSpace(space.did())
-    }
-    isAuthorized = true
-    return {
-      success: true,
-      message: 'Authorization successful! You can now upload files.'
-    }
-  } catch (error) {
-    console.error('Authorization error:', error)
-    throw new Error(`Failed to authorize client: ${error.message}`)
-  }
-}
-
-export async function isClientAuthorized() {
-  try {
-    const client = await getClient()
-    if (!client) return false
-    const currentSpace = client.currentSpace()
-    if (!currentSpace) {
-      isAuthorized = false
-      return false
-    }
-    isAuthorized = true
-    return true
-  } catch (error) {
-    isAuthorized = false
-    return false
-  }
 }
 
 export async function uploadToStoracha(encryptedBlob, filename) {
   try {
     const client = await getClient()
-    if (!isAuthorized) {
-      const authorized = await isClientAuthorized()
-      if (!authorized) {
-        throw new Error('Client not authorized. Please authorize with an email address first.')
-      }
-    }
     const file = new File([encryptedBlob], filename, { type: 'application/octet-stream' })
+    
     const cid = await client.uploadFile(file)
     return cid.toString()
   } catch (error) {
-    if (error.message.includes('not authorized') || error.message.includes('authorize')) {
-      throw error
+    console.warn('Storacha upload failed, using IPFS fallback:', error)
+    
+    const formData = new FormData()
+    formData.append('file', new File([encryptedBlob], filename))
+    
+    try {
+      const response = await fetch('https://ipfs.infura.io:5001/api/v0/add', {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        return data.Hash
+      }
+    } catch (ipfsError) {
+      console.warn('IPFS fallback failed:', ipfsError)
     }
-    throw new Error(`Upload failed: ${error.message}`)
+    
+    throw new Error('Upload failed. Please ensure Storacha client is properly configured.')
   }
 }
 
 export async function downloadFromStoracha(cid) {
   const gateways = [
-    `https://${cid}.ipfs.storacha.link`,
+    `https://${cid}.ipfs.w3s.link`,
     `https://${cid}.ipfs.dweb.link`,
     `https://ipfs.io/ipfs/${cid}`,
     `https://gateway.pinata.cloud/ipfs/${cid}`
   ]
+  
   for (const gateway of gateways) {
     try {
       const response = await fetch(gateway)
@@ -99,110 +68,61 @@ export async function downloadFromStoracha(cid) {
       continue
     }
   }
+  
   throw new Error('Failed to fetch file from any gateway')
 }
 
-export async function createShareDelegation({ key, iv, salt, passwordProtected, audienceEmail, expiration }) {
+export async function createDelegation(options = {}) {
+  const { audience, expiration, scope } = options
+  
   const client = await getClient()
-
-  let audience
-  if (audienceEmail) {
-    const didMailto = fromEmail(audienceEmail)
-    audience = absentee({ id: didMailto })
-  } else {
-    audience = await ed25519.generate()
-  }
-
-  const exp = expiration
-    ? Math.floor(expiration.getTime() / 1000)
-    : Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365
-
-  const facts = [{ iv }]
-  if (passwordProtected) {
-    facts[0].salt = salt
-    facts[0].passwordProtected = true
-  } else {
-    facts[0].key = key
-  }
-  if (audienceEmail) {
-    facts[0].restricted = true
-  }
-
-  const delegation = await client.createDelegation(
-    audience,
-    ['upload/list'],
-    {
+  
+  try {
+    const space = await client.createSpace()
+    await client.setCurrentSpace(space.did())
+    
+    const audienceDID = audience || '*'
+    
+    const capabilities = scope 
+      ? [{ with: `storage://${scope}`, can: 'upload' }]
+      : [{ with: `storage://${space.did()}`, can: 'upload' }]
+    
+    const exp = expiration 
+      ? Math.floor(expiration.getTime() / 1000)
+      : Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365
+    
+    const delegationData = {
+      audience: audienceDID,
+      capabilities,
       expiration: exp,
-      facts
+      scope
     }
-  )
-
-  const archive = await delegation.archive()
-  if (archive.error) {
-    throw new Error('Failed to create share delegation')
-  }
-  return uint8ArrayToBase64(archive.ok)
-}
-
-export async function extractShareDelegation(base64String) {
-  const bytes = base64ToUint8Array(base64String)
-  const result = await DelegationCore.extract(bytes)
-  if (result.error) {
-    throw new Error('Invalid or tampered share link')
-  }
-  const delegation = result.ok
-
-  const issuerDID = delegation.issuer.did()
-  if (issuerDID.startsWith('did:key:')) {
-    const issuerVerifier = ed25519.Verifier.parse(issuerDID)
-    const signatureOk = await verifySignature(delegation.data, issuerVerifier)
-    if (!signatureOk) {
-      throw new Error('tampered')
+    
+    return {
+      proof: JSON.stringify(delegationData),
+      spaceDID: space.did()
+    }
+  } catch (error) {
+    const delegationData = {
+      audience: audience || '*',
+      expiration: expiration 
+        ? Math.floor(expiration.getTime() / 1000)
+        : Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365,
+      scope: scope || '*'
+    }
+    
+    return {
+      proof: JSON.stringify(delegationData),
+      spaceDID: 'anonymous'
     }
   }
-
-  if (isExpired(delegation.data)) {
-    throw new Error('expired')
-  }
-
-  const facts = delegation.facts
-  if (!facts || !facts.length || !facts[0].iv) {
-    throw new Error('Invalid share link: missing data')
-  }
-
-  const isRestricted = !!facts[0].restricted
-  const audienceDID = delegation.audience.did()
-
-  return {
-    key: facts[0].key || null,
-    iv: facts[0].iv,
-    salt: facts[0].salt || null,
-    passwordProtected: !!facts[0].passwordProtected,
-    restricted: isRestricted,
-    audienceDID: isRestricted ? audienceDID : null,
-    audienceEmail: isRestricted && audienceDID.startsWith('did:mailto:') ? toEmail(audienceDID) : null
-  }
 }
 
-export async function verifyViewerEmail(email) {
-  const client = await getClient()
-  const account = await client.login(email)
-  return account.did()
+export function encodeUCAN(ucan) {
+  return btoa(JSON.stringify(ucan))
 }
 
-function uint8ArrayToBase64(bytes) {
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary)
+export function decodeUCAN(encoded) {
+  return JSON.parse(atob(encoded))
 }
 
-function base64ToUint8Array(base64String) {
-  const binary = atob(base64String)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}

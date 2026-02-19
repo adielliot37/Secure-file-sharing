@@ -221,7 +221,6 @@ export default function View() {
     tampered: 'Link invalid'
   }
 
-  // Loading state
   if (loading && !needsPassword && !needsEmailVerification) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white">
@@ -236,7 +235,6 @@ export default function View() {
     )
   }
 
-  // Email verification
   if (needsEmailVerification && !fileData) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white">
@@ -291,7 +289,6 @@ export default function View() {
     )
   }
 
-  // Password prompt
   if (needsPassword && !fileData) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white">
@@ -341,7 +338,6 @@ export default function View() {
     )
   }
 
-  // Error state
   if (error) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white">
@@ -373,7 +369,6 @@ export default function View() {
 
   if (!fileData) return null
 
-  // File view
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white">
       <Header />
