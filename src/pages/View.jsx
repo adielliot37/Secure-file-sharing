@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { decryptFile, decryptFileWithPassword, base64ToArrayBuffer } from '../utils/encryption'
-import { downloadFromStoracha, extractShareDelegation, verifyViewerEmail } from '../utils/storacha'
+import { downloadFromStoracha } from '../utils/storacha'
 
 function FlashLogo({ size = 'sm' }) {
   const sizes = { sm: 'w-8 h-8', md: 'w-10 h-10' }
@@ -46,48 +46,73 @@ export default function View() {
   const [encryptedData, setEncryptedData] = useState(null)
   const [filename, setFilename] = useState('file')
   const [fileType, setFileType] = useState('application/octet-stream')
-  const [needsEmailVerification, setNeedsEmailVerification] = useState(false)
-  const [verificationEmail, setVerificationEmail] = useState('')
-  const [verifying, setVerifying] = useState(false)
+  const [viewsRemaining, setViewsRemaining] = useState(null)
+  const [viewLimitExceeded, setViewLimitExceeded] = useState(false)
+  const [noteCopied, setNoteCopied] = useState(false)
 
   useEffect(() => {
     const loadFile = async () => {
       try {
         const cidParam = searchParams.get('cid')
-        const delegationBase64 = searchParams.get('d')
+        const keyParam = searchParams.get('key')
+        const ivParam = searchParams.get('iv')
+        const saltParam = searchParams.get('salt')
         const filenameParam = searchParams.get('filename') || 'file'
         const fileTypeParam = searchParams.get('type') || 'application/octet-stream'
+        const expParam = searchParams.get('exp')
+        const maxViewsParam = searchParams.get('maxViews')
 
         setFilename(filenameParam)
         setFileType(fileTypeParam)
 
-        if (!cidParam || !delegationBase64) {
+        if (!cidParam || !ivParam) {
           throw new Error('Missing required parameters')
         }
 
-        const extracted = await extractShareDelegation(delegationBase64)
-
-        if (extracted.restricted) {
-          const data = await downloadFromStoracha(cidParam)
-          setEncryptedData(data)
-          setDelegationData(extracted)
-          setNeedsEmailVerification(true)
-          setLoading(false)
-          return
+        // Check expiration
+        if (expParam) {
+          const expTime = parseInt(expParam, 10) * 1000
+          if (Date.now() > expTime) {
+            throw new Error('expired')
+          }
         }
 
-        if (extracted.passwordProtected) {
+        // Check self-destruct view limit
+        if (maxViewsParam) {
+          const max = parseInt(maxViewsParam, 10)
+          const storageKey = `flash_views_${cidParam}`
+          const currentViews = parseInt(localStorage.getItem(storageKey) || '0', 10)
+
+          if (currentViews >= max) {
+            setViewLimitExceeded(true)
+            setLoading(false)
+            return
+          }
+
+          // Increment before fetching
+          const newCount = currentViews + 1
+          localStorage.setItem(storageKey, String(newCount))
+          setViewsRemaining(max - newCount)
+        }
+
+        // Password-protected flow
+        if (saltParam && !keyParam) {
           const data = await downloadFromStoracha(cidParam)
           setEncryptedData(data)
-          setDelegationData(extracted)
+          setDelegationData({ salt: saltParam, iv: ivParam })
           setNeedsPassword(true)
           setLoading(false)
           return
         }
 
+        // Direct decrypt flow
+        if (!keyParam) {
+          throw new Error('Missing decryption key')
+        }
+
         const data = await downloadFromStoracha(cidParam)
-        const key = base64ToArrayBuffer(extracted.key)
-        const iv = base64ToArrayBuffer(extracted.iv)
+        const key = base64ToArrayBuffer(keyParam)
+        const iv = base64ToArrayBuffer(ivParam)
 
         const decrypted = await decryptFile(
           new Uint8Array(data),
@@ -117,49 +142,6 @@ export default function View() {
 
     loadFile()
   }, [searchParams])
-
-  const handleEmailVerification = async () => {
-    if (!verificationEmail || !delegationData) return
-
-    setVerifying(true)
-    setError(null)
-    try {
-      const accountDID = await verifyViewerEmail(verificationEmail)
-
-      if (accountDID !== delegationData.audienceDID) {
-        setError('This file was not shared with this email address.')
-        setVerifying(false)
-        return
-      }
-
-      if (delegationData.passwordProtected) {
-        setNeedsEmailVerification(false)
-        setNeedsPassword(true)
-        setVerifying(false)
-        return
-      }
-
-      const key = base64ToArrayBuffer(delegationData.key)
-      const iv = base64ToArrayBuffer(delegationData.iv)
-
-      const decrypted = await decryptFile(
-        new Uint8Array(encryptedData),
-        key,
-        new Uint8Array(iv)
-      )
-
-      setFileData({
-        data: decrypted,
-        filename,
-        type: fileType
-      })
-      setNeedsEmailVerification(false)
-    } catch (err) {
-      setError('Email verification failed. Check your inbox and approve the login.')
-    } finally {
-      setVerifying(false)
-    }
-  }
 
   const handlePasswordSubmit = async () => {
     if (!viewPassword || !delegationData || !encryptedData) return
@@ -199,9 +181,19 @@ export default function View() {
     URL.revokeObjectURL(url)
   }
 
+  const isSecretNote = fileData?.type === 'text/secret-note'
   const isImage = fileData?.type?.startsWith('image/')
   const isVideo = fileData?.type?.startsWith('video/')
   const isPdf = fileData?.type === 'application/pdf'
+
+  const noteContent = isSecretNote ? new TextDecoder().decode(fileData.data) : null
+
+  const copyNote = () => {
+    if (!noteContent) return
+    navigator.clipboard.writeText(noteContent)
+    setNoteCopied(true)
+    setTimeout(() => setNoteCopied(false), 2000)
+  }
 
   const errorIcons = {
     expired: (
@@ -221,7 +213,33 @@ export default function View() {
     tampered: 'Link invalid'
   }
 
-  if (loading && !needsPassword && !needsEmailVerification) {
+  // Link burned screen
+  if (viewLimitExceeded) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] text-white">
+        <Header />
+        <div className="flex items-center justify-center px-4" style={{ minHeight: 'calc(100vh - 65px)' }}>
+          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8 max-w-md w-full text-center backdrop-blur-sm">
+            <div className="inline-flex items-center justify-center w-14 h-14 bg-red-500/10 border border-red-500/20 rounded-2xl mb-4">
+              <svg className="w-7 h-7 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17.25 6.75L6.75 17.25M6.75 6.75l10.5 10.5" />
+              </svg>
+            </div>
+            <h2 className="text-xl font-bold text-white mb-1">Link burned</h2>
+            <p className="text-sm text-zinc-500 mb-6">This self-destructing link has reached its maximum number of views on this device.</p>
+            <a
+              href="/"
+              className="inline-block bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-2.5 px-6 rounded-xl transition-all text-sm"
+            >
+              Share a file
+            </a>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (loading && !needsPassword) {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white">
         <Header />
@@ -229,60 +247,6 @@ export default function View() {
           <div className="text-center">
             <div className="inline-block animate-spin rounded-full h-10 w-10 border-2 border-zinc-700 border-t-amber-500 mb-4"></div>
             <p className="text-zinc-500 text-sm">Fetching & decrypting...</p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (needsEmailVerification && !fileData) {
-    return (
-      <div className="min-h-screen bg-[#0a0a0a] text-white">
-        <Header />
-        <div className="flex items-center justify-center px-4" style={{ minHeight: 'calc(100vh - 65px)' }}>
-          <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8 max-w-md w-full backdrop-blur-sm">
-            <div className="text-center mb-6">
-              <div className="inline-flex items-center justify-center w-14 h-14 bg-amber-500/10 border border-amber-500/20 rounded-2xl mb-4">
-                <svg className="w-7 h-7 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <h2 className="text-xl font-bold text-white mb-1">Verify your email</h2>
-              <p className="text-sm text-zinc-500">
-                This file was shared with <span className="text-amber-400 font-medium">{delegationData?.audienceEmail}</span>
-              </p>
-            </div>
-            {error && (
-              <div className="mb-4 p-3 bg-red-500/5 border border-red-500/20 rounded-xl">
-                <p className="text-sm text-red-400">{error}</p>
-              </div>
-            )}
-            <div className="space-y-3">
-              <input
-                type="email"
-                value={verificationEmail}
-                onChange={(e) => { setVerificationEmail(e.target.value); setError(null) }}
-                onKeyDown={(e) => e.key === 'Enter' && handleEmailVerification()}
-                className="w-full px-4 py-2.5 border border-zinc-700 rounded-xl bg-zinc-800/50 text-white placeholder-zinc-600 focus:outline-none focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20 transition-colors text-sm"
-                placeholder="Enter your email address"
-                autoFocus
-              />
-              <button
-                onClick={handleEmailVerification}
-                disabled={!verificationEmail || verifying}
-                className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-2.5 px-4 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm"
-              >
-                {verifying ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin"></div>
-                    Verifying...
-                  </span>
-                ) : 'Verify'}
-              </button>
-              <p className="text-xs text-zinc-600 text-center">
-                You'll receive a verification email from Storacha
-              </p>
-            </div>
           </div>
         </div>
       </div>
@@ -373,62 +337,104 @@ export default function View() {
     <div className="min-h-screen bg-[#0a0a0a] text-white">
       <Header />
       <div className="container mx-auto max-w-4xl py-8 px-4">
-        <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 md:p-8 backdrop-blur-sm">
-          <div className="mb-6">
-            <h1 className="text-2xl md:text-3xl font-bold text-white mb-1">
-              {fileData.filename}
-            </h1>
-            <p className="text-sm text-zinc-600">
-              {(fileData.data.length / 1024 / 1024).toFixed(2)} MB
+        {viewsRemaining !== null && (
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-center">
+            <p className="text-sm text-amber-400">
+              {viewsRemaining === 0
+                ? 'This is the last view on this device. The link will be burned after this.'
+                : `${viewsRemaining} view${viewsRemaining !== 1 ? 's' : ''} remaining on this device`}
             </p>
           </div>
+        )}
 
-          <div className="mb-6">
-            {isImage && (
-              <img
-                src={URL.createObjectURL(new Blob([fileData.data], { type: fileData.type }))}
-                alt={fileData.filename}
-                className="max-w-full h-auto rounded-xl border border-zinc-800 mx-auto"
-              />
-            )}
-            {isVideo && (
-              <video
-                controls
-                className="max-w-full h-auto rounded-xl border border-zinc-800 mx-auto"
-                src={URL.createObjectURL(new Blob([fileData.data], { type: fileData.type }))}
-              />
-            )}
-            {isPdf && (
-              <iframe
-                src={URL.createObjectURL(new Blob([fileData.data], { type: fileData.type }))}
-                className="w-full h-[600px] rounded-xl border border-zinc-800"
-                title={fileData.filename}
-              />
-            )}
-            {!isImage && !isVideo && !isPdf && (
-              <div className="bg-zinc-800/30 border border-zinc-800 rounded-xl p-12 text-center">
-                <svg className="mx-auto h-14 w-14 text-zinc-700 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                </svg>
-                <p className="text-sm text-zinc-600">Preview not available for this file type</p>
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-6 md:p-8 backdrop-blur-sm">
+          {isSecretNote ? (
+            <>
+              <div className="mb-6 text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-amber-500/10 border border-amber-500/20 rounded-2xl mb-3">
+                  <svg className="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-bold text-white">Secret Note</h2>
               </div>
-            )}
-          </div>
+              <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-6 mb-6">
+                <p className="text-zinc-200 whitespace-pre-wrap break-words">{noteContent}</p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={copyNote}
+                  className="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-3 px-6 rounded-xl transition-all text-sm"
+                >
+                  {noteCopied ? 'Copied!' : 'Copy'}
+                </button>
+                <a
+                  href="/"
+                  className="flex-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors text-sm text-center"
+                >
+                  Share a file
+                </a>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="mb-6">
+                <h1 className="text-2xl md:text-3xl font-bold text-white mb-1">
+                  {fileData.filename}
+                </h1>
+                <p className="text-sm text-zinc-600">
+                  {(fileData.data.length / 1024 / 1024).toFixed(2)} MB
+                </p>
+              </div>
 
-          <div className="flex gap-3">
-            <button
-              onClick={downloadFile}
-              className="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-3 px-6 rounded-xl transition-all text-sm"
-            >
-              Download
-            </button>
-            <a
-              href="/"
-              className="flex-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors text-sm text-center"
-            >
-              Share a file
-            </a>
-          </div>
+              <div className="mb-6">
+                {isImage && (
+                  <img
+                    src={URL.createObjectURL(new Blob([fileData.data], { type: fileData.type }))}
+                    alt={fileData.filename}
+                    className="max-w-full h-auto rounded-xl border border-zinc-800 mx-auto"
+                  />
+                )}
+                {isVideo && (
+                  <video
+                    controls
+                    className="max-w-full h-auto rounded-xl border border-zinc-800 mx-auto"
+                    src={URL.createObjectURL(new Blob([fileData.data], { type: fileData.type }))}
+                  />
+                )}
+                {isPdf && (
+                  <iframe
+                    src={URL.createObjectURL(new Blob([fileData.data], { type: fileData.type }))}
+                    className="w-full h-[600px] rounded-xl border border-zinc-800"
+                    title={fileData.filename}
+                  />
+                )}
+                {!isImage && !isVideo && !isPdf && (
+                  <div className="bg-zinc-800/30 border border-zinc-800 rounded-xl p-12 text-center">
+                    <svg className="mx-auto h-14 w-14 text-zinc-700 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                    <p className="text-sm text-zinc-600">Preview not available for this file type</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={downloadFile}
+                  className="flex-1 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-black font-semibold py-3 px-6 rounded-xl transition-all text-sm"
+                >
+                  Download
+                </button>
+                <a
+                  href="/"
+                  className="flex-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-white font-semibold py-3 px-6 rounded-xl transition-colors text-sm text-center"
+                >
+                  Share a file
+                </a>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
